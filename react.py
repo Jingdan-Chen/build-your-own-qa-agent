@@ -1,15 +1,12 @@
-
-import pandas as pd
-import random
-import string
 import re
 import google.generativeai as genai
 import os
-
+import synthetic_data
 
 MY_API_KEY = os.getenv("API_KEY")
 genai.configure(api_key=MY_API_KEY)
-random.seed(42) # Set the random seed for reproducibility.
+store_df = synthetic_data.synthetic_data_gen(num_rows= 1000)
+
 
 def format_code_blocks(text):
   """Formats code blocks within "Action X:" sections by adding ```python.
@@ -25,107 +22,6 @@ def format_code_blocks(text):
   replacement = lambda m: f"{m.group(1)}:\n```python\n{m.group(2).strip()}\n```"
   return re.sub(pattern, replacement, text, flags=re.DOTALL)
 
-def generate_random_string(length=10):
-  """Generates a random string of specified length."""
-  letters = string.ascii_letters
-  return ''.join(random.choice(letters) for _ in range(length))
-
-def generate_random_id(length=8):
-  """Generates a random integer ID of specified length."""
-  return random.randint(10**(length-1), (10**length)-1)
-
-num_rows = 1000  # Number of rows to generate
-
-data = {
-    'store_id': [generate_random_id() for _ in range(num_rows)],
-    'store_name': [generate_random_string() for _ in range(num_rows)],
-    'region_code': [random.choice(["US", "CA", "UK", "DE", "FR", "JP", "AU"]) for _ in range(num_rows)],
-    'store_type': [random.choice(['Supermarket', 'Convenience Store']) for _ in range(num_rows)],
-    'num_products': [random.randint(1, 50) for _ in range(num_rows)],
-    'num_customers_last_28d': [random.randint(10, 10000) for _ in range(num_rows)],
-    'num_customers_last_180d': [random.randint(100, 100000) for _ in range(num_rows)],
-    'num_customers_last_365d': [random.randint(1000, 1000000) for _ in range(num_rows)],
-    'revenues_last28d': [random.randint(100, 1000000) for _ in range(num_rows)],
-    'revenues_last180d': [random.randint(1000, 10000000) for _ in range(num_rows)],
-    'revenues_last365d': [random.randint(10000, 100000000) for _ in range(num_rows)],
-}
-store_df = pd.DataFrame(data)
-
-# Define model instructions for ReAct prompting
-# The model instruction was borrowed from the ReAct paper with a few minor adjustments.
-
-model_instructions = """
-Solve a question answering task with interleaving Thought, Action, Observation steps.
-Only use the results from the table provided.
-Thought can reason about the current situation,
-Observation is understanding relevant information from an Action's output and
-Action can be of three types:
-(1) <search>entity</search>, which searches the exact entity on table scheme from table `store_df`,
- and returns the column or columns of interested. We already have a dataframe called `store_df`.
- If you cannot find it, you will return some similar columns to search the information from those topics.
-(2) <execute>code</execute>, which execute the python code without printing function, assigh the final result to __result__ and returns __result__.
-(3) <finish>answer</finish>, which returns the answer from the execution step and finishes the task. If the answer contains a number, please make the number human readable.
-
-"""
-
-# Define table schema for the developer dataframe
-
-table_schema = """
-  Here is the table schema for table `store_df`, these description which can help you understand what each column means and the expected entries of the dataframe, can help you search the columns you are looking for.
-  The schema description is:
-
-  | Column Name                                       | Description                                                                                                                                                                                                                                                                                                                                                                |
-  | :------------------------------------------------ | :------------------------------------------------------------------------------------------------------------------------------------|
-  | `store_id`                                        | The unique identifier of the store. |
-  | `store_name`                                      | The name of the store. |
-  | `region_code`                                     | The region code where the store is located. |
-  | `store_type`                                      | The type of store, such as 'Supermarket' or 'Convenience Store'. |
-  | `num_products`                                    | The total number of products sold in the store. |
-  | `num_customers_last_28d`                          | The number of customers who visited the store in the last 28 days. |
-  | `num_customers_last_180d`                         | The number of customers who visited the store in the last 180 days. |
-  | `num_customers_last_365d`                         | The number of customers who visited the store in the last 365 days. |
-  | `revenues_last28d`                                | The total revenue generated by the store in the last 28 days. |
-  | `revenues_last180d`                               | The total revenue generated by the store in the last 180 days. |
-  | `revenues_last365d`                               | The total revenue generated by the store in the last 365 days. |
-"""
-
-
-# Define few-shot examples for in-context learning
-
-examples = """
-  Here are an example.
-
-  Question 1
-  How much United State stores made in the last 28d?
-
-  Thought 1
-  I need to find store that are in US and their corresponding revenue value in the last 28d. I already know the column name for 28d revenue is 'revenues_last28d' and the column for store location is 'region_code'.
-
-  ## Action 1:
-  <execute>
-  import pandas as pd
-  __result__ = store_df[store_df['region_code'] == 'United State']['revenues_last28d'].sum()
-
-  </execute>
-  ## Thought 2:
-  The code cannot find United State. I will try to find a store in US instead
-
-  ## Action 2:
-  <execute>
-  import pandas as pd
-  __result__ = store_df[store_df['region_code'] == 'US']['revenues_last28d'].sum()
-
-  </execute>
-
-  ## Thought 3:
-  The code successfully retrieved the 28d revenue of store in the US.
-
-  ## Action 4:
-  <finish> Store in the US made $78,808,584 last 28 days.
-"""
-
-# Combine instructions, schema, and examples into the final ReAct prompt
-ReAct_prompt = model_instructions + table_schema+ examples
 
 # ## The ReAct Agent Pipeline
 # Define the ReAct class for interacting with the Gemini model
