@@ -1,0 +1,314 @@
+
+import pandas as pd
+import random
+import string
+import re
+import google.generativeai as genai
+import os
+
+
+MY_API_KEY = os.getenv("API_KEY")
+genai.configure(api_key=MY_API_KEY)
+random.seed(42) # Set the random seed for reproducibility.
+
+def format_code_blocks(text):
+  """Formats code blocks within "Action X:" sections by adding ```python.
+
+  Args:
+    text: The input string.
+
+  Returns:
+    The modified string with formatted code blocks.
+  """
+
+  pattern = r"(Action \d+):\n(.*?)(?=Thought \d+)"
+  replacement = lambda m: f"{m.group(1)}:\n```python\n{m.group(2).strip()}\n```"
+  return re.sub(pattern, replacement, text, flags=re.DOTALL)
+
+def generate_random_string(length=10):
+  """Generates a random string of specified length."""
+  letters = string.ascii_letters
+  return ''.join(random.choice(letters) for _ in range(length))
+
+def generate_random_id(length=8):
+  """Generates a random integer ID of specified length."""
+  return random.randint(10**(length-1), (10**length)-1)
+
+num_rows = 1000  # Number of rows to generate
+
+data = {
+    'store_id': [generate_random_id() for _ in range(num_rows)],
+    'store_name': [generate_random_string() for _ in range(num_rows)],
+    'region_code': [random.choice(["US", "CA", "UK", "DE", "FR", "JP", "AU"]) for _ in range(num_rows)],
+    'store_type': [random.choice(['Supermarket', 'Convenience Store']) for _ in range(num_rows)],
+    'num_products': [random.randint(1, 50) for _ in range(num_rows)],
+    'num_customers_last_28d': [random.randint(10, 10000) for _ in range(num_rows)],
+    'num_customers_last_180d': [random.randint(100, 100000) for _ in range(num_rows)],
+    'num_customers_last_365d': [random.randint(1000, 1000000) for _ in range(num_rows)],
+    'revenues_last28d': [random.randint(100, 1000000) for _ in range(num_rows)],
+    'revenues_last180d': [random.randint(1000, 10000000) for _ in range(num_rows)],
+    'revenues_last365d': [random.randint(10000, 100000000) for _ in range(num_rows)],
+}
+store_df = pd.DataFrame(data)
+
+# Define model instructions for ReAct prompting
+# The model instruction was borrowed from the ReAct paper with a few minor adjustments.
+
+model_instructions = """
+Solve a question answering task with interleaving Thought, Action, Observation steps.
+Only use the results from the table provided.
+Thought can reason about the current situation,
+Observation is understanding relevant information from an Action's output and
+Action can be of three types:
+(1) <search>entity</search>, which searches the exact entity on table scheme from table `store_df`,
+ and returns the column or columns of interested. We already have a dataframe called `store_df`.
+ If you cannot find it, you will return some similar columns to search the information from those topics.
+(2) <execute>code</execute>, which execute the python code without printing function, assigh the final result to __result__ and returns __result__.
+(3) <finish>answer</finish>, which returns the answer from the execution step and finishes the task. If the answer contains a number, please make the number human readable.
+
+"""
+
+# Define table schema for the developer dataframe
+
+table_schema = """
+  Here is the table schema for table `store_df`, these description which can help you understand what each column means and the expected entries of the dataframe, can help you search the columns you are looking for.
+  The schema description is:
+
+  | Column Name                                       | Description                                                                                                                                                                                                                                                                                                                                                                |
+  | :------------------------------------------------ | :------------------------------------------------------------------------------------------------------------------------------------|
+  | `store_id`                                        | The unique identifier of the store. |
+  | `store_name`                                      | The name of the store. |
+  | `region_code`                                     | The region code where the store is located. |
+  | `store_type`                                      | The type of store, such as 'Supermarket' or 'Convenience Store'. |
+  | `num_products`                                    | The total number of products sold in the store. |
+  | `num_customers_last_28d`                          | The number of customers who visited the store in the last 28 days. |
+  | `num_customers_last_180d`                         | The number of customers who visited the store in the last 180 days. |
+  | `num_customers_last_365d`                         | The number of customers who visited the store in the last 365 days. |
+  | `revenues_last28d`                                | The total revenue generated by the store in the last 28 days. |
+  | `revenues_last180d`                               | The total revenue generated by the store in the last 180 days. |
+  | `revenues_last365d`                               | The total revenue generated by the store in the last 365 days. |
+"""
+
+
+# Define few-shot examples for in-context learning
+
+examples = """
+  Here are an example.
+
+  Question 1
+  How much United State stores made in the last 28d?
+
+  Thought 1
+  I need to find store that are in US and their corresponding revenue value in the last 28d. I already know the column name for 28d revenue is 'revenues_last28d' and the column for store location is 'region_code'.
+
+  ## Action 1:
+  <execute>
+  import pandas as pd
+  __result__ = store_df[store_df['region_code'] == 'United State']['revenues_last28d'].sum()
+
+  </execute>
+  ## Thought 2:
+  The code cannot find United State. I will try to find a store in US instead
+
+  ## Action 2:
+  <execute>
+  import pandas as pd
+  __result__ = store_df[store_df['region_code'] == 'US']['revenues_last28d'].sum()
+
+  </execute>
+
+  ## Thought 3:
+  The code successfully retrieved the 28d revenue of store in the US.
+
+  ## Action 4:
+  <finish> Store in the US made $78,808,584 last 28 days.
+"""
+
+# Combine instructions, schema, and examples into the final ReAct prompt
+ReAct_prompt = model_instructions + table_schema+ examples
+
+# ## The ReAct Agent Pipeline
+# Define the ReAct class for interacting with the Gemini model
+
+class ReAct:
+  def __init__(self, model: str, ReAct_prompt: str):
+    """
+    Initializes the ReAct agent, enabling the Gemini model to understand and
+    respond to a 'Few-shot ReAct prompt'. This is achieved by mimicking the
+    'function calling' technique, which allows the model to generate both
+    reasoning steps and specific actions in an interleaved fashion.
+
+    Args:
+        model: name to the model.
+        ReAct_prompt: ReAct prompt.
+    """
+    self.model = genai.GenerativeModel(model)
+    self.chat = self.model.start_chat(history=[])
+    self.should_continue_prompting = True
+    self._search_history: list[str] = []
+    self._search_urls: list[str] = []
+    self._prompt = ReAct_prompt
+
+  @property
+  def prompt(self):
+    return self._prompt
+
+  @classmethod
+  def add_method(cls, func):
+    setattr(cls, func.__name__, func)
+
+  @staticmethod
+  def clean(text: str):
+    """Helper function for responses."""
+    text = text.replace("\n", " ")
+    return text
+
+# %%
+#@title Search
+@ReAct.add_method
+def search(self, query: str):
+    """
+    Perfoms search on `query` via a given dataframe.
+
+    Args:
+        query: Search parameter to query the dataframe.
+
+    Returns:
+        observation: Summary of the search finding for `query` if found.
+    """
+    query = query.strip()
+    try:
+      ## instruct the model to generate python code based on the query
+      observation = self.model.generate_content("""
+        Question: write a python code without any explination on question: {}.
+        Please do not name the final output.
+        Only return the value of the output without print function.
+
+        Answer:
+        """.format(query))
+
+      observation = observation.text
+      result = eval(observation.replace('```python', '').replace('```', ''))
+
+      ## keep search history
+      self._search_history.append(query)
+      self._search_results.append(result)
+    except:
+      observation = f'Could not find ["{query}"].'
+
+    return observation
+
+# %%
+#@title Execute
+
+@ReAct.add_method
+def execute(self, code_phrase: str):
+    """
+    Execute `code_phrase` from search and return the result.
+
+    Args:
+        phrase: The code snippit to look up the values of intested.
+
+    Returns:
+        code_result: Result after executing the `code_phrase` .
+    """
+
+    code_result = {}
+    try:
+      exec(code_phrase.replace('```python', '').replace('```', ''), globals(), code_result)
+    except:
+      code_result = f'Could not execute code["{code_phrase}"]'
+    return code_result
+
+# %%
+#@title Finish
+
+@ReAct.add_method
+def finish(self, _):
+  """
+  Stops the question-answering process when the model generates a `<finish>`
+  token. This is achieved by setting the `self.should_continue_prompting` flag
+  to `False`, which signals to the agent that the final answer has been reached.
+  """
+  self.should_continue_prompting = False
+
+# %%
+#@title Function calling
+
+@ReAct.add_method
+def __call__(self, user_question, max_calls: int=10, **generation_kwargs):
+  """
+  Starts multi-turn conversation with the LLM models, using function calling
+  to interact with external tools.
+
+  Args:
+      user_question: The initial question from the user.
+      max_calls: The maximum number of calls to the model before ending the
+          conversation.
+      generation_kwargs: Additional keyword arguments for text generation,
+          such as temperature and max_output_tokens. See
+          `genai.GenerativeModel.GenerationConfig` for details.
+  Returns:
+      responses: The responses from the model.
+
+  Raises:
+      AssertionError: if max_calls is not between 1 and 10
+  """
+  responses = ''
+
+  # set a higher max_calls for more complex task.
+  assert 0 < max_calls <= 10, "max_calls must be between 1 and 10"
+
+  if len(self.chat.history) == 0:
+    model_prompt = self.prompt + user_question
+  else:
+    model_prompt = user_question
+
+  # stop_sequences for the model to imitate function calling
+  callable_entities = ['</search>', '</execute>', '</finish>']
+  generation_kwargs.update({'stop_sequences': callable_entities})
+
+  self.should_continue_prompting = True
+  for idx in range(max_calls):
+
+    self.response = self.chat.send_message(
+        content=[model_prompt],
+        generation_config=generation_kwargs,
+        stream=False)
+
+    for chunk in self.response:
+      print(chunk.text.replace("tool_code", '').replace("`", ''), end='\n')
+
+    response_cmd = self.chat.history[-1].parts[-1].text
+    responses = responses + response_cmd
+
+    try:
+      cmd = re.findall(r'<(.*)>', response_cmd)[-1]
+      query = response_cmd.split(f'<{cmd}>')[-1].strip()
+
+      # call to appropriate function
+      observation = self.__getattribute__(cmd)(query)
+
+      if not self.should_continue_prompting:
+        break
+
+      stream_message = f"\nObservation {idx + 1}\n{observation}"
+
+      # send function's output as user's response to continue the conversation
+      model_prompt = f"<{cmd}>{query}</{cmd}>'s Output: {stream_message}"
+    except (IndexError, AttributeError) as e:
+      model_prompt = "Please try to generate as instructed by the prompt."
+  final_answer = (
+    self.chat.history[-1].parts[-1].text.split('<finish>')[-1].strip()
+  )
+
+  responses = format_code_blocks(responses)
+  responses = re.sub(r'Thought (\d+):', r'\n#### Thought \1:\n', responses)
+  responses = re.sub(
+      r'Observation (\d+):', r'\n#### Observation \1:\n', responses
+  )
+  responses = re.sub(r'Action (\d+):', r'\n#### Action \1:\n', responses)
+
+  return (responses, final_answer)
+
+
