@@ -423,7 +423,7 @@ def app():
 
   gemini_react_chat = react.ReAct(
       model='models/gemini-2.0-flash',
-      ReAct_prompt=prompt.get_prompt,
+      ReAct_prompt= prompt.get_prompt(),
   )
 
   def transform(text: str) -> str:
