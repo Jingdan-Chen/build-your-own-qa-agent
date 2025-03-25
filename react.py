@@ -156,9 +156,9 @@ def __call__(self, user_question, max_calls: int=10, **generation_kwargs):
   assert 0 < max_calls <= 10, "max_calls must be between 1 and 10"
 
   if len(self.chat.history) == 0:
-    model_prompt = self.prompt + user_question
+    model_prompt = 'Based on the dataset from store_df, ' + self.prompt + user_question
   else:
-    model_prompt = user_question
+    model_prompt = 'Based on the dataset from store_df, ' + user_question
 
   # stop_sequences for the model to imitate function calling
   callable_entities = ['</search>', '</execute>', '</finish>']

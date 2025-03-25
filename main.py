@@ -378,11 +378,12 @@ def add_subsection():
             padding=me.Padding.symmetric(vertical=0),
         ),
     )
-    me.markdown(
-        'Contact me at'
-        ' [Haoyuan Zhang in Linkedin (https://www.linkedin.com/in/haoyuan-z-b4541492/) if you have'
-        ' any questions!',
-        style=me.Style(align_items='center', margin=me.Margin(bottom=0)),
+    me.html(
+      """
+      Contact me at Haoyuan Zhang in 
+      <a href="https://www.linkedin.com/in/haoyuan-z-b4541492/" target="_blank">Linkedin</a>
+      """,
+      mode="sanitized",
     )
 
 def add_warning_section():
