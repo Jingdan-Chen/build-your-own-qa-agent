@@ -1,7 +1,7 @@
 import re
 import google.generativeai as genai
 import os
-import synthetic_data
+import deployment.synthetic_data as synthetic_data
 
 MY_API_KEY = os.getenv("API_KEY")
 genai.configure(api_key=MY_API_KEY)

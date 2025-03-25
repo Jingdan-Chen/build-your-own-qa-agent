@@ -5,9 +5,9 @@ import types
 from typing import Callable, cast, Generator, Literal
 
 import mesop as me
-import react
+import deployment.react as react
 from datetime import datetime
-import prompt
+import deployment.prompt as prompt
 
 @me.stateclass
 class FeedbackState:
