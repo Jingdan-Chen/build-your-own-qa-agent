@@ -1,0 +1,5 @@
+mesop
+gunicorn
+pandas
+numpy
+google-generativeai
